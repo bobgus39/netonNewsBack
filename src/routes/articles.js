@@ -2,6 +2,8 @@ const router = require('express').Router()
 const ctrl = require('../controllers/articlesController')
 const upload = require('../middleware/upload')
 
+router.use(ctrl.expireOldFeatured)
+
 router.get('/', ctrl.getAll)
 router.get('/featured', ctrl.getFeatured)
 router.get('/latest', ctrl.getLatest)

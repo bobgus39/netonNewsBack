@@ -39,6 +39,35 @@ async function getTagsForArticle(articleId) {
   return rows.map(r => r.name)
 }
 
+async function expireOldFeatured(req, res, next) {
+  try {
+    await pool.query(
+      `UPDATE articles SET is_featured = 0
+       WHERE is_featured = 1 AND published_at < NOW() - INTERVAL 4 DAY`
+    )
+  } catch (err) {
+    // No bloqueamos la petición por un fallo en esta tarea de mantenimiento
+  }
+  next()
+}
+
+// Selecciona artículos con las destacadas primero y, para el resto,
+// intercalando categorías (round-robin) para evitar que una sola
+// categoría con muchas publicaciones domine el listado.
+async function getDiverse(limit) {
+  const [rows] = await pool.query(
+    `WITH ranked AS (
+       SELECT a.*, ROW_NUMBER() OVER (PARTITION BY a.category_id ORDER BY a.published_at DESC, a.id DESC) AS cat_rank
+       FROM articles a
+     )
+     SELECT ${ARTICLE_FIELDS} FROM ranked a LEFT JOIN categories c ON a.category_id = c.id
+     ORDER BY a.is_featured DESC, a.published_at DESC, a.cat_rank ASC, a.id DESC
+     LIMIT ?`,
+    [limit]
+  )
+  return rows
+}
+
 async function getAll(req, res) {
   const page = Math.max(1, parseInt(req.query.page) || 1)
   const limit = Math.min(50, parseInt(req.query.limit) || 10)
@@ -65,10 +94,7 @@ async function getFeatured(req, res) {
        WHERE a.is_featured = 1 ORDER BY a.published_at DESC LIMIT 5`
     )
     if (!rows.length) {
-      const [latest] = await pool.query(
-        `SELECT ${ARTICLE_FIELDS} FROM articles a LEFT JOIN categories c ON a.category_id = c.id
-         ORDER BY a.published_at DESC LIMIT 5`
-      )
+      const latest = await getDiverse(5)
       return res.json(latest.map(r => mapArticle(r)))
     }
     res.json(rows.map(r => mapArticle(r)))
@@ -80,11 +106,7 @@ async function getFeatured(req, res) {
 async function getLatest(req, res) {
   const limit = Math.min(20, parseInt(req.query.limit) || 10)
   try {
-    const [rows] = await pool.query(
-      `SELECT ${ARTICLE_FIELDS} FROM articles a LEFT JOIN categories c ON a.category_id = c.id
-       ORDER BY a.published_at DESC LIMIT ?`,
-      [limit]
-    )
+    const rows = await getDiverse(limit)
     const [[{ total }]] = await pool.query('SELECT COUNT(*) AS total FROM articles')
     const articles = rows.map(r => mapArticle(r))
     res.json({ articles, pagination: { total } })
@@ -271,4 +293,4 @@ async function remove(req, res) {
   }
 }
 
-module.exports = { getAll, getFeatured, getLatest, getById, getBySlug, getByCategory, search, create, update, remove }
+module.exports = { getAll, getFeatured, getLatest, getById, getBySlug, getByCategory, search, create, update, remove, expireOldFeatured }
