@@ -115,6 +115,25 @@ async function getLatest(req, res) {
   }
 }
 
+async function getMostRead(req, res) {
+  const limit = Math.min(20, parseInt(req.query.limit) || 8)
+  try {
+    const [rows] = await pool.query(
+      `WITH ranked AS (
+         SELECT a.*, ROW_NUMBER() OVER (PARTITION BY a.category_id ORDER BY a.views DESC, a.published_at DESC, a.id DESC) AS cat_rank
+         FROM articles a
+       )
+       SELECT ${ARTICLE_FIELDS} FROM ranked a LEFT JOIN categories c ON a.category_id = c.id
+       ORDER BY a.cat_rank ASC, a.views DESC, a.id DESC
+       LIMIT ?`,
+      [limit]
+    )
+    res.json(rows.map(r => mapArticle(r)))
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+}
+
 async function getById(req, res) {
   try {
     const [rows] = await pool.query(
@@ -293,4 +312,4 @@ async function remove(req, res) {
   }
 }
 
-module.exports = { getAll, getFeatured, getLatest, getById, getBySlug, getByCategory, search, create, update, remove, expireOldFeatured }
+module.exports = { getAll, getFeatured, getLatest, getMostRead, getById, getBySlug, getByCategory, search, create, update, remove, expireOldFeatured }
