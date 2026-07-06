@@ -117,17 +117,22 @@ async function getLatest(req, res) {
 
 async function getMostRead(req, res) {
   const limit = Math.min(20, parseInt(req.query.limit) || 8)
-  try {
-    const [rows] = await pool.query(
-      `WITH ranked AS (
-         SELECT a.*, ROW_NUMBER() OVER (PARTITION BY a.category_id ORDER BY a.views DESC, a.published_at DESC, a.id DESC) AS cat_rank
-         FROM articles a
-       )
-       SELECT ${ARTICLE_FIELDS} FROM ranked a LEFT JOIN categories c ON a.category_id = c.id
-       ORDER BY a.cat_rank ASC, a.views DESC, a.id DESC
-       LIMIT ?`,
-      [limit]
+  // Solo cuenta la última semana: sin este filtro, las noticias antiguas
+  // (con visitas acumuladas) desplazan siempre a las recientes.
+  const mostReadQuery = (recentOnly) => `
+    WITH ranked AS (
+      SELECT a.*, ROW_NUMBER() OVER (PARTITION BY a.category_id ORDER BY a.views DESC, a.published_at DESC, a.id DESC) AS cat_rank
+      FROM articles a
+      ${recentOnly ? 'WHERE a.published_at >= NOW() - INTERVAL 7 DAY' : ''}
     )
+    SELECT ${ARTICLE_FIELDS} FROM ranked a LEFT JOIN categories c ON a.category_id = c.id
+    ORDER BY a.cat_rank ASC, a.views DESC, a.id DESC
+    LIMIT ?`
+  try {
+    let [rows] = await pool.query(mostReadQuery(true), [limit])
+    if (rows.length < limit) {
+      ;[rows] = await pool.query(mostReadQuery(false), [limit])
+    }
     res.json(rows.map(r => mapArticle(r)))
   } catch (err) {
     res.status(500).json({ message: err.message })
